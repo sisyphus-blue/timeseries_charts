@@ -1,0 +1,128 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import os
+
+# Define the file paths
+file_a = r'C:\Users\ardas\ALDI-HOFER\COIN - Market Intelligence - General\11_Calculation and Chart Codes\Normal A\a.xlsx'
+file_bm = r'C:\Users\ardas\ALDI-HOFER\COIN - Market Intelligence - General\11_Calculation and Chart Codes\Normal A\bm.xlsx'
+file_x = r'C:\Users\ardas\ALDI-HOFER\COIN - Market Intelligence - General\11_Calculation and Chart Codes\Normal A\x.xlsx'
+output_dir = r'C:\Users\ardas\ALDI-HOFER\COIN - Market Intelligence - General\11_Calculation and Chart Codes\Normal A\output'
+
+# Create the output directory if it doesn't exist
+os.makedirs(output_dir, exist_ok=True)
+
+# Read and resample dataset A (all sheets)
+df_a_sheets = pd.read_excel(file_a, sheet_name=None, header=0, index_col=0)
+df_a_resampled = {sheet_name: df.resample('M').mean() for sheet_name, df in df_a_sheets.items()}
+print("Dataset A sheets resampled to monthly frequency:")
+for sheet_name, df in df_a_resampled.items():
+    print(f"Sheet {sheet_name}: {df.shape}")
+    print(df.head())
+
+# Read and resample dataset Bm (multiple sheets) and convert each to monthly frequency
+bm_sheets = pd.read_excel(file_bm, sheet_name=None, header=0, index_col=0)
+df_b = pd.concat([sheet.resample('M').mean() for sheet in bm_sheets.values()], axis=1)
+print("Dataset B after resampling to monthly frequency:")
+print(df_b.shape)
+print(df_b.head())
+
+# Read dataset X
+df_x = pd.read_excel(file_x, header=0)
+print("Dataset X loaded:")
+print(df_x.shape)
+print(df_x.head())
+
+# Function to find a column in the dictionary of DataFrames
+def find_column(df_dict, col_name):
+    for sheet_name, df in df_dict.items():
+        if col_name in df.columns:
+            return df[col_name]
+    return None
+
+# Iterate through each pair in dataset X
+for idx, row in df_x.iterrows():
+    col_a = row['Column_A']
+    col_b = row['Column_B']
+    print(f"Processing pair: {col_a} and {col_b}")
+
+    # Find columns in resampled datasets A and B
+    series_a = find_column(df_a_resampled, col_a)
+    series_b = df_b[col_b] if col_b in df_b.columns else None
+
+    if series_a is not None and series_b is not None:
+        # Interpolate missing values
+        series_a = series_a.interpolate(method='linear')
+        series_b = series_b.interpolate(method='linear')
+
+        # Merge the series on the index (date)
+        merged_df = pd.merge(series_a, series_b, left_index=True, right_index=True, suffixes=('_a', '_b'))
+        print(f"Merged DataFrame shape: {merged_df.shape}")
+
+        # Find the first occurrence where both columns have non-null values
+        non_null_mask = merged_df.notnull().all(axis=1)
+        if non_null_mask.any():
+            first_occurrence = merged_df[non_null_mask].index[0]
+            print(f"First non-null occurrence: {first_occurrence}")
+
+            # Get the values at this row
+            at = merged_df.loc[first_occurrence, series_a.name]
+            bt = merged_df.loc[first_occurrence, series_b.name]
+
+            # Normalize the data
+            normalized_a = merged_df[series_a.name] / at
+            normalized_b = merged_df[series_b.name] / bt
+
+            # Create the resulting DataFrame
+            result_df = pd.DataFrame({
+                'Date': merged_df.index,
+                series_a.name: normalized_a,
+                series_b.name: normalized_b
+            }).set_index('Date')
+            print(f"Result DataFrame shape: {result_df.shape}")
+            print(result_df.head())
+
+            # Plot the unconverted pair
+            fig, axes = plt.subplots(1, 2, figsize=(16, 5))  # Wider and less tall
+
+            # Split titles and legends into multiple lines if longer than 40 characters
+            def split_text(text, length=40):
+                return "\n".join([text[i:i+length] for i in range(0, len(text), length)])
+
+            title_a = split_text(series_a.name) if len(series_a.name) > 40 else series_a.name
+            title_b = split_text(series_b.name) if len(series_b.name) > 40 else series_b.name
+            legend_a = split_text(series_a.name) if len(series_a.name) > 40 else series_a.name
+            legend_b = split_text(series_b.name) if len(series_b.name) > 40 else series_b.name
+
+            # Plot the original time series with adjusted title and legend font size
+            axes[0].plot(merged_df.index, merged_df[series_a.name], label=f'Original {legend_a}')
+            axes[0].plot(merged_df.index, merged_df[series_b.name], label=f'Original {legend_b}')
+            axes[0].set_xlabel('Date')
+            axes[0].set_ylabel('Values')
+            axes[0].set_title(f'Original Time Series:\n{title_a} vs {title_b}', fontsize=10)  # Adjust title font size
+            axes[0].legend(loc='best', fontsize=8)  # Adjust legend font size
+            axes[0].grid(True)
+
+            # Plot the normalized time series with adjusted title and legend font size
+            axes[1].plot(result_df.index, result_df[series_a.name], label=f'Normalized {legend_a}')
+            axes[1].plot(result_df.index, result_df[series_b.name], label=f'Normalized {legend_b}')
+            axes[1].set_xlabel('Date')
+            axes[1].set_ylabel('Normalized Values')
+            axes[1].set_title(f'Normalized Time Series:\n{title_a} vs {title_b}', fontsize=10)  # Adjust title font size
+            axes[1].legend(loc='best', fontsize=8)  # Adjust legend font size
+            axes[1].grid(True)
+
+            # Shorten column names for the output filename
+            col_a_short = col_a[:10]  # Use only the first 10 characters of col_a
+            col_b_short = col_b[:10]  # Use only the first 10 characters of col_b
+
+            # Adjust layout and save the plot
+            plt.tight_layout()
+            plt.savefig(os.path.join(output_dir, f'comparison_{col_a_short}_vs_{col_b_short}.png'))
+            plt.show()
+            plt.close(fig)
+        else:
+            print(f"No common non-null data points found for pair: {col_a} and {col_b}")
+    else:
+        print(f"Column not found for pair: {col_a} and/or {col_b}")
+
+print("Plots saved successfully and displayed in the notebook.")
